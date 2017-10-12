@@ -3,18 +3,18 @@
 
 import os
 import time
+import random
+
 import numpy as np
 from scipy.io import loadmat
-from scipy.spatial.distance import cdist
 from sklearn import preprocessing
-import random
 
 
 ###############################################################################
 #                   Part of code about arguments to modify                    #
 #                                                                             #
 
-featuresToUse = "surf"  # surf, CaffeNet4096, GoogleNet1024
+featuresToUse = "GoogleNet1024"  # surf, CaffeNet4096, GoogleNet1024
 numberIteration = 10
 adaptationAlgoUsed = ["NA", "SA"]
 # see function adaptData for available algorithms
@@ -24,49 +24,93 @@ adaptationAlgoUsed = ["NA", "SA"]
 ###############################################################################
 
 
-def indices(a, func):
-    return [i for (i, val) in enumerate(a) if func(val)]
+def generateSubset(X, Y, nPerClass):
+    idx = []
+    for c in np.unique(Y):
+        idxClass = np.argwhere(Y == c).ravel()
+        random.shuffle(idxClass)
+        idx.extend(idxClass[0:min(nPerClass, len(idxClass))])
+    return (X[idx, :], Y[idx])
 
 
-def split(Y, nPerClass):
-    idx1 = []
-    idx2 = []
-    for c in range(1, max(Y)+1):
-        idx = indices(Y, lambda x: x == c)
-        random.shuffle(idx)
-        idx1 = idx1 + idx[0:min(nPerClass, len(idx))]
-        idx2 = idx2 + idx[min(nPerClass, len(idx)):-1]
-    return idx1, idx2
-
-
-def adaptData(algo, sourceData, sourceLabels, targetData, targetLabels):
+def adaptData(algo, Sx, Sy, Tx, Ty):
     if algo == "NA":  # No Adaptation
-        sourceAdapted = sourceData
-        targetAdapted = targetData
+        sourceAdapted = Sx
+        targetAdapted = Tx
     if algo == "SA":
         # Subspace Alignment, described in:
         # Unsupervised Visual Domain Adaptation Using Subspace Alignment, 2013,
         # Fernando et al.
         from sklearn.decomposition import PCA
         d = 80  # subspace dimension
-        pcaS = PCA(d).fit(sourceData)
-        pcaT = PCA(d).fit(targetData)
+        pcaS = PCA(d).fit(Sx)
+        pcaT = PCA(d).fit(Tx)
         XS = np.transpose(pcaS.components_)[:, :d]  # source subspace matrix
         XT = np.transpose(pcaT.components_)[:, :d]  # target subspace matrix
         Xa = XS.dot(np.transpose(XS)).dot(XT)  # align source subspace
-        sourceAdapted = sourceData.dot(Xa) # project source in aligned subspace
-        targetAdapted = targetData.dot(XT) # project target in target subspace
+        sourceAdapted = Sx.dot(Xa)  # project source in aligned subspace
+        targetAdapted = Tx.dot(XT)  # project target in target subspace
 
     return sourceAdapted, targetAdapted
 
 
+def pairwiseEuclidean(a, b, squared=False):
+    """
+    Compute the pairwise euclidean distance between matrices a and b.
+
+
+    Parameters
+    ----------
+    a : np.ndarray (n, f)
+        first matrix
+    b : np.ndarray (m, f)
+        second matrix
+    squared : boolean, optional (default False)
+        if True, return squared euclidean distance matrix
+
+
+    Returns
+    -------
+    c : (n x m) np.ndarray
+        pairwise euclidean distance distance matrix
+    """
+    # a is shape (n, f) and b shape (m, f). Return matrix c of shape (n, m).
+    # First compute in c the squared euclidean distance. And return its
+    # square root. At each cell [i,j] of c, we want to have
+    # sum{k in range(f)} ( (a[i,k] - b[j,k])^2 ). We know that
+    # (a-b)^2 = a^2 -2ab +b^2. Thus we want to have in each cell of c:
+    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] +b[j,k]^2).
+
+    # Multiply a by b transpose to obtain in each cell [i,j] of c the
+    # value sum{k in range(f)} ( a[i,k]b[j,k] )
+    c = a.dot(b.T)
+    # multiply by -2 to have sum{k in range(f)} ( -2a[i,k]b[j,k] )
+    np.multiply(c, -2, out=c)
+
+    # Compute the vectors of the sum of squared elements.
+    a = np.power(a, 2).sum(axis=1)
+    b = np.power(b, 2).sum(axis=1)
+
+    # Add the vectors in each columns (respectivly rows) of c.
+    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] )
+    c += a.reshape(-1, 1)
+    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] +b[j,k]^2)
+    c += b
+
+    if not squared:
+        np.sqrt(c, out=c)
+
+    return c
+
+
 def getAccuracy(trainData, trainLabels, testData, testLabels):
     # ------------ Accuracy evaluation by performing a 1NearestNeighbor
-    dist = cdist(trainData, testData, metric='sqeuclidean')
+    dist = pairwiseEuclidean(trainData, testData, squared=True)
     minIDX = np.argmin(dist, axis=0)
     prediction = trainLabels[minIDX]
     accuracy = 100 * float(sum(prediction == testLabels)) / len(testData)
     return accuracy
+
 
 # ---------------------------- DATA Loading Part ------------------------------
 domainNames = ['amazon', 'caltech10', 'dslr', 'webcam']
@@ -126,10 +170,7 @@ for test in tests:
     for name in adaptationAlgoUsed:
         results[name] = []
     for iteration in range(numberIteration):
-        id1, id2 = split(Sy, perClassSource)
-        subSx = Sx[id1, :]
-        subSy = Sy[id1]
-
+        (subSx, subSy) = generateSubset(Sx, Sy, perClassSource)
         for name in adaptationAlgoUsed:
             # Apply domain adaptation algorithm
             subSa, Ta = adaptData(name, subSx, subSy, Tx, Ty)
