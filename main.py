@@ -60,6 +60,27 @@ def adaptData(algo, Sx, Sy, Tx, Ty):
         transp3.fit(Xs=Sx, ys=Sy, Xt=Tx)
         sourceAdapted = transp3.transform(Xs=Sx)
         targetAdapted = Tx
+    elif algo == "TCA":
+        # Domain adaptation via transfer component analysis. IEEE TNN 2011
+        d = 80  # subspace dimension
+        Ns = Sx.shape[0]
+        Nt = Tx.shape[0]
+        L_ss = (1. / (Ns * Ns)) * np.full((Ns, Ns), 1)
+        L_st = (-1. / (Ns * Nt)) * np.full((Ns, Nt), 1)
+        L_ts = (-1. / (Nt * Ns)) * np.full((Nt, Ns), 1)
+        L_tt = (1. / (Nt * Nt)) * np.full((Nt, Nt), 1)
+        L_up = np.hstack((L_ss, L_st))
+        L_down = np.hstack((L_ts, L_tt))
+        L = np.vstack((L_up, L_down))
+        X = np.vstack((Sx, Tx))
+        K = np.dot(X, X.T)  # linear kernel
+        H = (np.identity(Ns+Nt)-1./(Ns+Nt)*np.ones((Ns + Nt, 1)) *
+             np.ones((Ns + Nt, 1)).T)
+        inv = np.linalg.pinv(np.identity(Ns + Nt) + K.dot(L).dot(K))
+        D, W = np.linalg.eigh(inv.dot(K).dot(H).dot(K))
+        W = W[:, np.argsort(-D)[:d]]  # eigenvectors of d highest eigenvalues
+        sourceAdapted = np.dot(K[:Ns, :], W)  # project source
+        targetAdapted = np.dot(K[Ns:, :], W)  # project target
 
     return sourceAdapted, targetAdapted
 
@@ -100,58 +121,59 @@ for sourceDomain in domainNames:
             if sourceDomain == 'dslr':
                 perClassSource = 8
             tests.append([sourceDomain, targetDomain, perClassSource])
-
 meansAcc = {}
 stdsAcc = {}
+totalTime = {}
 print("Feature used: ", featuresToUse)
 print("Number of iterations: ", numberIteration)
 print("Adaptation algorithms used: ", end="")
 for name in adaptationAlgoUsed:
     meansAcc[name] = []
     stdsAcc[name] = []
+    totalTime[name] = 0
     print(" ", name, end="")
 print("")
-
 # -------------------- Main testing loop --------------------------------------
 for test in tests:
-    startTime = time.time()
     Sname = test[0]
     Tname = test[1]
     perClassSource = test[2]
     print(Sname.upper()[:1] + '->' + Tname.upper()[:1], end=" ")
-
     # --------------------II. prepare data-------------------------------------
     Sx = data[Sname][0]
     Sy = data[Sname][1]
     Tx = data[Tname][0]
     Ty = data[Tname][1]
-
     # --------------------III. run experiments---------------------------------
     results = {}
+    times = {}
     for name in adaptationAlgoUsed:
         results[name] = []
+        times[name] = []
     for iteration in range(numberIteration):
         (subSx, subSy) = generateSubset(Sx, Sy, perClassSource)
         for name in adaptationAlgoUsed:
             # Apply domain adaptation algorithm
+            startTime = time.time()
             subSa, Ta = adaptData(name, subSx, subSy, Tx, Ty)
             # Compute the accuracy classification
             results[name].append(getAccuracy(subSa, subSy, Ta, Ty))
+            times[name].append(time.time() - startTime)
         print(".", end="")
-
-    currentTime = time.time()
-    print(" {:6.2f}".format(currentTime - startTime) + "s")
-
+    print("")
     for name in adaptationAlgoUsed:
         meanAcc = np.mean(results[name])
         stdAcc = np.std(results[name])
         meansAcc[name].append(meanAcc)
         stdsAcc[name].append(stdAcc)
-        print("     {:4.1f}".format(meanAcc), " {:3.1f}".format(stdAcc), name)
+        totalTime[name] += sum(times[name])
+        print("     {:4.1f}".format(meanAcc) + "  {:3.1f}".format(stdAcc) +
+              "  {:4}".format(name) + " {:6.2f}s".format(sum(times[name])))
 
 print("")
-print("Mean results:")
+print("Mean results and total time")
 for name in adaptationAlgoUsed:
     meanMean = np.mean(meansAcc[name])
     meanStd = np.mean(stdsAcc[name])
-    print("     {:4.1f}".format(meanMean), " {:3.1f}".format(meanStd), name)
+    print("     {:4.1f}".format(meanMean) + "  {:3.1f}".format(meanStd) +
+          "  {:4}".format(name) + " {:6.2f}s".format(totalTime[name]))
