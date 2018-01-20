@@ -8,6 +8,7 @@ import random
 import numpy as np
 from scipy.io import loadmat
 from sklearn import preprocessing
+from sklearn.metrics import euclidean_distances
 
 
 ###############################################################################
@@ -37,7 +38,7 @@ def adaptData(algo, Sx, Sy, Tx, Ty):
     if algo == "NA":  # No Adaptation
         sourceAdapted = Sx
         targetAdapted = Tx
-    if algo == "SA":
+    elif algo == "SA":
         # Subspace Alignment, described in:
         # Unsupervised Visual Domain Adaptation Using Subspace Alignment, 2013,
         # Fernando et al.
@@ -50,7 +51,7 @@ def adaptData(algo, Sx, Sy, Tx, Ty):
         Xa = XS.dot(np.transpose(XS)).dot(XT)  # align source subspace
         sourceAdapted = Sx.dot(Xa)  # project source in aligned subspace
         targetAdapted = Tx.dot(XT)  # project target in target subspace
-    if algo == "OT":
+    elif algo == "OT":
         # Optimal Transport with class regularization described in:
         # Domain adaptation with regularized optimal transport, 2014.
         # Courty et al.
@@ -63,58 +64,9 @@ def adaptData(algo, Sx, Sy, Tx, Ty):
     return sourceAdapted, targetAdapted
 
 
-def pairwiseEuclidean(a, b, squared=False):
-    """
-    Compute the pairwise euclidean distance between matrices a and b.
-
-
-    Parameters
-    ----------
-    a : np.ndarray (n, f)
-        first matrix
-    b : np.ndarray (m, f)
-        second matrix
-    squared : boolean, optional (default False)
-        if True, return squared euclidean distance matrix
-
-
-    Returns
-    -------
-    c : (n x m) np.ndarray
-        pairwise euclidean distance distance matrix
-    """
-    # a is shape (n, f) and b shape (m, f). Return matrix c of shape (n, m).
-    # First compute in c the squared euclidean distance. And return its
-    # square root. At each cell [i,j] of c, we want to have
-    # sum{k in range(f)} ( (a[i,k] - b[j,k])^2 ). We know that
-    # (a-b)^2 = a^2 -2ab +b^2. Thus we want to have in each cell of c:
-    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] +b[j,k]^2).
-
-    # Multiply a by b transpose to obtain in each cell [i,j] of c the
-    # value sum{k in range(f)} ( a[i,k]b[j,k] )
-    c = a.dot(b.T)
-    # multiply by -2 to have sum{k in range(f)} ( -2a[i,k]b[j,k] )
-    np.multiply(c, -2, out=c)
-
-    # Compute the vectors of the sum of squared elements.
-    a = np.power(a, 2).sum(axis=1)
-    b = np.power(b, 2).sum(axis=1)
-
-    # Add the vectors in each columns (respectivly rows) of c.
-    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] )
-    c += a.reshape(-1, 1)
-    # sum{k in range(f)} ( a[i,k]^2 -2a[i,k]b[j,k] +b[j,k]^2)
-    c += b
-
-    if not squared:
-        np.sqrt(c, out=c)
-
-    return c
-
-
 def getAccuracy(trainData, trainLabels, testData, testLabels):
     # ------------ Accuracy evaluation by performing a 1NearestNeighbor
-    dist = pairwiseEuclidean(trainData, testData, squared=True)
+    dist = euclidean_distances(trainData, testData, squared=True)
     minIDX = np.argmin(dist, axis=0)
     prediction = trainLabels[minIDX]
     accuracy = 100 * float(sum(prediction == testLabels)) / len(testData)
